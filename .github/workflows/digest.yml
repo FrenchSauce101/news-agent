@@ -1,0 +1,57 @@
+name: News Digest
+
+on:
+  schedule:
+    # All times UTC. GitHub Actions cron uses UTC.
+    - cron: "0 13 * * *"   # 6:00 AM PT (PDT = UTC-7)
+    - cron: "0 17 * * *"   # 10:00 AM PT
+    - cron: "0 21 * * *"   # 2:00 PM PT
+
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Digest slot override (morning / midday / afternoon)"
+        required: false
+        default: ""
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Detect digest slot
+        id: slot
+        run: |
+          # If a manual override was provided, use it.
+          if [ -n "${{ github.event.inputs.slot }}" ]; then
+            echo "slot=${{ github.event.inputs.slot }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Otherwise, map current UTC hour to a slot name.
+          HOUR=$(date -u +%H | sed 's/^0//')   # strip leading zero → integer
+          if [ "$HOUR" = "13" ]; then
+            echo "slot=morning" >> "$GITHUB_OUTPUT"
+          elif [ "$HOUR" = "17" ]; then
+            echo "slot=midday" >> "$GITHUB_OUTPUT"
+          else
+            echo "slot=afternoon" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run news digest agent
+        env:
+          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          DIGEST_SLOT: ${{ steps.slot.outputs.slot }}
+        run: python agent.py
