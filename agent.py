@@ -209,14 +209,17 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
     print(f"  [debug] Prompt article block is {len(article_text)} chars.")
     prompt = (
         f"You are a concise financial news analyst. Analyze these {len(usable)} recent news articles "
-        f"about '{sector_name}' and return a structured digest in exactly this format:\n\n"
-        "SUMMARY: [2-3 sentence executive summary of the most important developments]\n\n"
-        "KEY POINTS:\n"
-        "• [key point with source name in parentheses]\n"
-        "• [key point with source name in parentheses]\n"
-        "• [key point with source name in parentheses]\n"
-        "(3-5 bullet points total)\n\n"
-        "SO WHAT: [1-2 sentence insight on why this matters or what to watch]\n\n"
+        f"about '{sector_name}' and return a digest using EXACTLY this structure and labels — "
+        "no markdown, no asterisks, no ALL CAPS, no deviations:\n\n"
+        "Summary: [2-3 sentence executive summary of the most important developments]\n\n"
+        "Key Points:\n"
+        "• [Full sentence key point. (Source Name)]\n"
+        "• [Full sentence key point. (Source Name)]\n"
+        "• [Full sentence key point. (Source Name)]\n"
+        "Include 3-5 bullet points. Each bullet must end with the source name in parentheses.\n\n"
+        "So What?: [1-2 sentence insight on what this means for investors and what to watch next]\n\n"
+        "Important: Use exactly the labels 'Summary:', 'Key Points:', and 'So What?:' — "
+        "do not use bold markers, asterisks, or any other formatting.\n\n"
         f"Articles:\n{article_text}"
     )
 
@@ -258,62 +261,60 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
 # Email rendering
 # ---------------------------------------------------------------------------
 
+def _close_open_ul(html_parts: list[str]) -> None:
+    """Append </ul> if there is an unclosed <ul> in html_parts."""
+    for item in reversed(html_parts):
+        if item == '<ul>':
+            html_parts.append('</ul>')
+            return
+        if item == '</ul>':
+            return
+
+
 def text_to_html(text: str) -> str:
-    """Convert Claude's plain-text digest format into simple HTML."""
+    """Convert Claude's plain-text digest into clean HTML.
+
+    Handles any capitalisation variant Claude might return
+    (Summary / SUMMARY / **Summary:**) and strips stray markdown asterisks.
+    """
     html_parts = []
+
     for line in text.splitlines():
         line = line.strip()
+        # Strip markdown bold markers that Claude occasionally adds
+        line = line.replace("**", "")
         if not line:
             continue
-        if line.startswith("SUMMARY:"):
-            content = line[len("SUMMARY:"):].strip()
+
+        lower = line.lower()
+
+        if lower.startswith("summary:"):
+            content = line[len("summary:"):].strip()
             html_parts.append(f'<p><strong>Summary:</strong> {content}</p>')
-        elif line.startswith("KEY POINTS:"):
+
+        elif lower.startswith("key points:"):
             html_parts.append('<p><strong>Key Points:</strong></p><ul>')
-        elif line.startswith("•") or line.startswith("-"):
-            content = line.lstrip("•- ").strip()
+
+        elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
+            content = line.lstrip("•-* ").strip()
             html_parts.append(f'<li>{content}</li>')
-            # Close ul on next non-bullet will be handled below
-        elif line.startswith("SO WHAT:"):
-            # Close any open ul
-            if html_parts and html_parts[-1] != '</ul>':
-                # Check if we have open ul
-                for j in range(len(html_parts) - 1, -1, -1):
-                    if html_parts[j] == '<ul>':
-                        html_parts.append('</ul>')
-                        break
-                    elif html_parts[j] == '</ul>':
-                        break
-            content = line[len("SO WHAT:"):].strip()
+
+        elif lower.startswith("so what"):
+            _close_open_ul(html_parts)
+            # Strip any label variant: "So What?:", "So What:", "SO WHAT:"
+            colon_pos = line.find(":")
+            content = line[colon_pos + 1:].strip() if colon_pos != -1 else line
             html_parts.append(
-                f'<p style="background:#f0f7e0;border-left:3px solid #c8f060;'
-                f'padding:8px 12px;margin:12px 0;">'
-                f'<strong>So What:</strong> {content}</p>'
+                '<p style="background:#f0f7e0;border-left:3px solid #c8f060;'
+                'padding:8px 12px;margin:12px 0;">'
+                f'<strong>So What?</strong> {content}</p>'
             )
+
         else:
-            # Close any open ul before adding paragraph
-            in_list = False
-            for j in range(len(html_parts) - 1, -1, -1):
-                if html_parts[j] == '<ul>':
-                    in_list = True
-                    break
-                elif html_parts[j] == '</ul>':
-                    break
-            if in_list:
-                html_parts.append('</ul>')
+            _close_open_ul(html_parts)
             html_parts.append(f'<p>{line}</p>')
 
-    # Close any trailing open ul
-    in_list = False
-    for j in range(len(html_parts) - 1, -1, -1):
-        if html_parts[j] == '<ul>':
-            in_list = True
-            break
-        elif html_parts[j] == '</ul>':
-            break
-    if in_list:
-        html_parts.append('</ul>')
-
+    _close_open_ul(html_parts)
     return "\n".join(html_parts)
 
 
