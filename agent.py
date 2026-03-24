@@ -7,6 +7,7 @@ import json
 import os
 import smtplib
 import ssl
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,10 +47,11 @@ SECTORS = {
         "proptech",
     ],
     "San Diego / Local": [
-        "San Diego real estate",
-        "San Diego economy",
-        "Southern California housing",
-        "Oceanside",
+        "San Diego",
+        "San Diego housing",
+        "California real estate",
+        "Southern California economy",
+        "San Diego business",
     ],
 }
 
@@ -168,16 +170,21 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
         method="POST",
     )
 
+    key_preview = api_key[:8] + "..." if api_key else "(empty)"
+    print(f"  [debug] Anthropic key preview: {key_preview}")
+
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
         return data["content"][0]["text"]
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        print(f"  [!] Anthropic HTTP error for '{sector_name}': {e.code} — {body[:200]}")
+        print(f"  [!] Anthropic HTTP {e.code} error for '{sector_name}':")
+        print(f"      {body}")
         return "<p><em>Summarization failed.</em></p>"
     except Exception as e:
         print(f"  [!] Anthropic error for '{sector_name}': {e}")
+        traceback.print_exc()
         return "<p><em>Summarization failed.</em></p>"
 
 
