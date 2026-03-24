@@ -262,10 +262,11 @@ def build_html_email(slot: str, sections: list[tuple[str, list[dict], str]]) -> 
             title = a.get("title", "Article")[:80]
             url = a.get("url", "#")
             source = a.get("source", {}).get("name", "")
+            source_span = f' <span style="color:#888;">— {source}</span>' if source else ""
             article_links += (
                 f'<div style="margin:4px 0;font-size:12px;">'
                 f'<a href="{url}" style="color:#4a90d9;text-decoration:none;">{title}</a>'
-                f'{f" <span style=\'color:#888;\'>— {source}</span>" if source else ""}'
+                f'{source_span}'
                 f'</div>'
             )
 
