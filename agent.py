@@ -66,6 +66,16 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 ARTICLES_PER_SECTOR = 10
 
+# Domains with free full-text content — passed to NewsAPI as an allowlist
+ALLOWED_DOMAINS = (
+    "reuters.com,cnbc.com,marketwatch.com,apnews.com,businessinsider.com,"
+    "fortune.com,thestreet.com,investopedia.com,housingwire.com,globest.com,"
+    "bisnow.com,costar.com,commercialobserver.com"
+)
+
+# Paywalled domains — filtered out after fetching
+BLOCKED_DOMAINS = ("wsj.com", "bloomberg.com", "ft.com", "nytimes.com", "barrons.com")
+
 
 # ---------------------------------------------------------------------------
 # News fetching
@@ -79,6 +89,7 @@ def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[
 
     params = {
         "q": query,
+        "domains": ALLOWED_DOMAINS,
         "sortBy": "publishedAt",
         "pageSize": ARTICLES_PER_SECTOR,
         "language": "en",
@@ -98,8 +109,12 @@ def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[
         return []
 
     articles = data.get("articles", [])
-    # Filter out removed articles
-    articles = [a for a in articles if a.get("title") and a["title"] != "[Removed]"]
+    # Filter out removed articles and paywalled domains
+    articles = [
+        a for a in articles
+        if a.get("title") and a["title"] != "[Removed]"
+        and not any(blocked in a.get("url", "") for blocked in BLOCKED_DOMAINS)
+    ]
     return articles
 
 
@@ -123,14 +138,17 @@ def build_article_text(articles: list[dict]) -> str:
     """Format articles into a compact text block for the prompt."""
     lines = []
     for i, a in enumerate(articles, 1):
-        title = a.get("title", "No title")
+        title = a.get("title") or ""
         source = a.get("source", {}).get("name", "Unknown")
         date = (a.get("publishedAt") or "")[:10]
         description = a.get("description") or ""
+        content = a.get("content") or ""
+        # Strip the NewsAPI "[N chars]" truncation suffix from content
+        if " [+" in content:
+            content = content[:content.rfind(" [+")]
         url = a.get("url", "")
-        lines.append(
-            f"{i}. [{source}] {title} ({date})\n   {description}\n   {url}"
-        )
+        body = " ".join(filter(None, [title, description, content]))
+        lines.append(f"{i}. [{source}] ({date})\n   {body}\n   {url}")
     return "\n\n".join(lines)
 
 
