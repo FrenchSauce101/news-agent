@@ -66,12 +66,13 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 ARTICLES_PER_SECTOR = 10
 
-# NewsAPI source IDs (free, full-text) per sector — must not be combined with "domains"
+# NewsAPI source IDs — free, no paywall. Must not be combined with "domains" parameter.
+# Removed: business-insider (metered paywall), fortune (paywall), wired (metered paywall)
 SECTOR_SOURCES = {
-    "Commercial Real Estate": "business-insider,cnbc,fortune,associated-press,reuters",
-    "Finance & Markets":      "cnbc,reuters,business-insider,fortune,associated-press",
-    "Technology":             "techcrunch,the-verge,wired,cnbc,reuters",
-    "San Diego / Local":      "cnbc,reuters,business-insider,associated-press,fortune",
+    "Commercial Real Estate": "cnbc,reuters,associated-press,abc-news,cbs-news",
+    "Finance & Markets":      "cnbc,reuters,associated-press,abc-news,cbs-news",
+    "Technology":             "techcrunch,the-verge,cnbc,reuters,associated-press",
+    "San Diego / Local":      "cnbc,reuters,associated-press,abc-news,cbs-news",
 }
 
 
@@ -142,13 +143,23 @@ def build_article_text(articles: list[dict]) -> str:
         date = (a.get("publishedAt") or "")[:10]
         description = a.get("description") or ""
         content = a.get("content") or ""
-        # Strip the NewsAPI "[N chars]" truncation suffix from content
+        # Strip the NewsAPI "[+N chars]" truncation suffix from content
         if " [+" in content:
             content = content[:content.rfind(" [+")]
         url = a.get("url", "")
         body = " ".join(filter(None, [title, description, content]))
+        # Cap each article at 500 chars to keep the overall prompt manageable
+        body = body[:500]
         lines.append(f"{i}. [{source}] ({date})\n   {body}\n   {url}")
     return "\n\n".join(lines)
+
+
+def has_usable_content(article: dict) -> bool:
+    """Return True if the article has enough text to be worth summarizing."""
+    description = article.get("description") or ""
+    content = article.get("content") or ""
+    # Require at least 60 chars of combined description + content
+    return len(description) + len(content) >= 60
 
 
 def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> str:
@@ -156,9 +167,16 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
     if not articles:
         return "<p><em>No articles found for this sector.</em></p>"
 
-    article_text = build_article_text(articles)
+    # Drop articles with no readable text (paywalled sources return empty description/content)
+    usable = [a for a in articles if has_usable_content(a)]
+    print(f"  [debug] {len(usable)}/{len(articles)} articles have usable content.")
+    if not usable:
+        return "<p><em>No readable article content available for this sector (all sources paywalled or empty).</em></p>"
+
+    article_text = build_article_text(usable)
+    print(f"  [debug] Prompt article block is {len(article_text)} chars.")
     prompt = (
-        f"You are a concise financial news analyst. Analyze these {len(articles)} recent news articles "
+        f"You are a concise financial news analyst. Analyze these {len(usable)} recent news articles "
         f"about '{sector_name}' and return a structured digest in exactly this format:\n\n"
         "SUMMARY: [2-3 sentence executive summary of the most important developments]\n\n"
         "KEY POINTS:\n"
@@ -191,7 +209,7 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
     print(f"  [debug] Anthropic key preview: {key_preview}")
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode())
         return data["content"][0]["text"]
     except urllib.error.HTTPError as e:
