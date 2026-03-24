@@ -19,15 +19,50 @@ from email.mime.text import MIMEText
 # Sectors to track — edit this dict to customize what you follow
 # ---------------------------------------------------------------------------
 SECTORS = {
+    # Keywords are sent to NewsAPI as OR terms (first 8 used — broaden the query by
+    # putting the most general terms first and niche terms toward the bottom).
     "Commercial Real Estate": [
-        "commercial real estate",
-        "CRE",
-        "REIT",
+        "real estate",           # broadest — catches any real estate story
+        "commercial property",   # standard industry term
+        "office market",         # office sector (very topical post-COVID)
+        "REIT",                  # real estate investment trusts
+        "multifamily",           # apartment / housing investment sector
+        "industrial real estate",# warehouses, logistics, data centers
+        "office vacancy",        # key metric widely reported on
+        "property values",       # broad valuation coverage
+        # --- niche terms below (extend the [:8] cap in fetch_articles to include more) ---
         "cap rate",
-        "multifamily",
+        "commercial mortgage",
+        "retail real estate",
+        "real estate investment",
+        "office space",
+        "warehouse",
+        "data center",
+        "sublease",
+        "coworking",
+        "net lease",
+        "CMBS",
+        "real estate developer",
+        "property market",
+        "apartment market",
+        "logistics real estate",
+        "office towers",
+        "real estate deal",
+        "building sale",
         "JLL",
         "CBRE",
-        "office market",
+        "Cushman Wakefield",
+        "Blackstone real estate",
+        "Brookfield real estate",
+        "Starwood real estate",
+        "office occupancy",
+        "rent growth",
+        "housing market",
+        "real estate market",
+        "commercial lending",
+        "real estate financing",
+        "property tax",
+        "zoning",
     ],
     "Finance & Markets": [
         "interest rates",
@@ -46,13 +81,6 @@ SECTORS = {
         "fintech",
         "proptech",
     ],
-    "San Diego / Local": [
-        "San Diego",
-        "San Diego housing",
-        "California real estate",
-        "Southern California economy",
-        "San Diego business",
-    ],
 }
 
 SLOT_LABELS = {
@@ -66,13 +94,11 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 ARTICLES_PER_SECTOR = 10
 
-# NewsAPI source IDs — free, no paywall. Must not be combined with "domains" parameter.
-# Removed: business-insider (metered paywall), fortune (paywall), wired (metered paywall)
+# NewsAPI source IDs — free sources only. Must not be combined with "domains".
 SECTOR_SOURCES = {
     "Commercial Real Estate": "cnbc,reuters,associated-press,abc-news,cbs-news",
     "Finance & Markets":      "cnbc,reuters,associated-press,abc-news,cbs-news",
     "Technology":             "techcrunch,the-verge,cnbc,reuters,associated-press",
-    "San Diego / Local":      "cnbc,reuters,associated-press,abc-news,cbs-news",
 }
 
 
@@ -82,24 +108,23 @@ SECTOR_SOURCES = {
 
 def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[dict]:
     """Fetch up to ARTICLES_PER_SECTOR articles for a sector from NewsAPI."""
-    sources = SECTOR_SOURCES.get(sector_name, "cnbc,reuters,associated-press")
+    sources = SECTOR_SOURCES.get(sector_name)  # None for San Diego
 
-    # San Diego uses a hand-crafted broad query; others use sector name + top 2 keywords
-    if sector_name == "San Diego / Local":
-        query = "San Diego business OR San Diego real estate OR San Diego economy"
-    else:
-        query_parts = [sector_name] + keywords[:2]
-        query = " OR ".join(f'"{p}"' for p in query_parts)
+    # Build query from keywords directly — do NOT prepend the sector name, which
+    # just duplicates the first keyword and produces a tighter-than-needed phrase match.
+    query = " OR ".join(f'"{kw}"' for kw in keywords[:8])
 
-    # NOTE: NewsAPI forbids combining "sources" with "domains" or "country"
     params = {
         "q": query,
-        "sources": sources,
         "sortBy": "publishedAt",
         "pageSize": ARTICLES_PER_SECTOR,
         "language": "en",
         "apiKey": api_key,
     }
+    # NOTE: NewsAPI forbids combining "sources" with "domains" or "country"
+    params["sources"] = sources
+
+    print(f"  [debug] Query: {query!r}  sources={sources}")
     url = f"{NEWSAPI_URL}?{urllib.parse.urlencode(params)}"
 
     req = urllib.request.Request(url, headers={"User-Agent": "NewsDigestAgent/1.0"})
@@ -107,13 +132,20 @@ def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
-        print(f"  [!] NewsAPI HTTP error for '{sector_name}': {e.code} {e.reason}")
+        body = e.read().decode()
+        print(f"  [!] NewsAPI HTTP {e.code} error for '{sector_name}': {body}")
         return []
     except Exception as e:
         print(f"  [!] NewsAPI error for '{sector_name}': {e}")
         return []
 
+    # NewsAPI returns HTTP 200 with status=error for API-level problems (e.g. bad params)
+    if data.get("status") == "error":
+        print(f"  [!] NewsAPI API error for '{sector_name}': {data.get('message')}")
+        return []
+
     articles = data.get("articles", [])
+    print(f"  [debug] NewsAPI returned {len(articles)} raw articles.")
     articles = [a for a in articles if a.get("title") and a["title"] != "[Removed]"]
     return articles
 
@@ -214,13 +246,12 @@ def summarize_sector(sector_name: str, articles: list[dict], api_key: str) -> st
         return data["content"][0]["text"]
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        print(f"  [!] Anthropic HTTP {e.code} error for '{sector_name}':")
-        print(f"      {body}")
-        return "<p><em>Summarization failed.</em></p>"
+        print(f"  [!] Anthropic HTTP {e.code} error for '{sector_name}': {body}")
+        return f"<p><em>Summarization failed — Anthropic HTTP {e.code}: {body[:300]}</em></p>"
     except Exception as e:
         print(f"  [!] Anthropic error for '{sector_name}': {e}")
         traceback.print_exc()
-        return "<p><em>Summarization failed.</em></p>"
+        return f"<p><em>Summarization failed — {e}</em></p>"
 
 
 # ---------------------------------------------------------------------------
