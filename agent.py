@@ -402,12 +402,8 @@ def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[
     # First 15 keywords are used; put broadest terms first in the SECTORS dict.
     query = " OR ".join(f'"{kw}"' for kw in keywords[:15])
 
-    # Limit to the last 24 hours so each digest surfaces today's news only
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
     params = {
         "q": query,
-        "from": since,
         "sortBy": "publishedAt",
         "pageSize": ARTICLES_PER_SECTOR,
         "language": "en",
