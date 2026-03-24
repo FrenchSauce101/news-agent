@@ -66,15 +66,13 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 ARTICLES_PER_SECTOR = 10
 
-# Domains with free full-text content — passed to NewsAPI as an allowlist
-ALLOWED_DOMAINS = (
-    "reuters.com,cnbc.com,marketwatch.com,apnews.com,businessinsider.com,"
-    "fortune.com,thestreet.com,investopedia.com,housingwire.com,globest.com,"
-    "bisnow.com,costar.com,commercialobserver.com"
-)
-
-# Paywalled domains — filtered out after fetching
-BLOCKED_DOMAINS = ("wsj.com", "bloomberg.com", "ft.com", "nytimes.com", "barrons.com")
+# NewsAPI source IDs (free, full-text) per sector — must not be combined with "domains"
+SECTOR_SOURCES = {
+    "Commercial Real Estate": "business-insider,cnbc,fortune,associated-press,reuters",
+    "Finance & Markets":      "cnbc,reuters,business-insider,fortune,associated-press",
+    "Technology":             "techcrunch,the-verge,wired,cnbc,reuters",
+    "San Diego / Local":      "cnbc,reuters,business-insider,associated-press,fortune",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +81,19 @@ BLOCKED_DOMAINS = ("wsj.com", "bloomberg.com", "ft.com", "nytimes.com", "barrons
 
 def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[dict]:
     """Fetch up to ARTICLES_PER_SECTOR articles for a sector from NewsAPI."""
-    # Use sector name + top 2 keywords as the query
-    query_parts = [sector_name] + keywords[:2]
-    query = " OR ".join(f'"{p}"' for p in query_parts)
+    sources = SECTOR_SOURCES.get(sector_name, "cnbc,reuters,associated-press")
 
+    # San Diego uses a hand-crafted broad query; others use sector name + top 2 keywords
+    if sector_name == "San Diego / Local":
+        query = "San Diego business OR San Diego real estate OR San Diego economy"
+    else:
+        query_parts = [sector_name] + keywords[:2]
+        query = " OR ".join(f'"{p}"' for p in query_parts)
+
+    # NOTE: NewsAPI forbids combining "sources" with "domains" or "country"
     params = {
         "q": query,
-        "domains": ALLOWED_DOMAINS,
+        "sources": sources,
         "sortBy": "publishedAt",
         "pageSize": ARTICLES_PER_SECTOR,
         "language": "en",
@@ -109,12 +113,7 @@ def fetch_articles(sector_name: str, keywords: list[str], api_key: str) -> list[
         return []
 
     articles = data.get("articles", [])
-    # Filter out removed articles and paywalled domains
-    articles = [
-        a for a in articles
-        if a.get("title") and a["title"] != "[Removed]"
-        and not any(blocked in a.get("url", "") for blocked in BLOCKED_DOMAINS)
-    ]
+    articles = [a for a in articles if a.get("title") and a["title"] != "[Removed]"]
     return articles
 
 
